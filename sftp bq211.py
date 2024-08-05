@@ -204,8 +204,7 @@ with DAG(
     )
 
     # Set up task dependencies
-    sftp_sensor >> download_task >> upload_to_gcs_landing_task >> data_check_task >> load_raw_bq_task >> get_dates_task >> generate_tasks
-    generate_tasks >> delete_raw_task >> archive_file_task
+    sftp_sensor >> download_task >> upload_to_gcs_landing_task >> data_check_task >> load_raw_bq_task >> get_dates_task >> generate_tasks >> delete_raw_task >> archive_file_task
 
 ### How to set environment variables in Airflow:
 1. Open the Airflow web UI.
