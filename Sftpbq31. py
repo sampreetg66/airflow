@@ -1,0 +1,242 @@
+Here's the complete code with the modifications to handle multiple files in the SFTP directory:
+
+```python
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator
+from airflow.operators.sensors import SFTPSensor
+from airflow.operators.bigquery_operator import BigQueryExecuteQueryOperator
+from airflow.operators.email_operator import EmailOperator
+from airflow.utils.dates import days_ago
+from airflow.utils.task_group import TaskGroup
+from google.cloud import bigquery, storage, secretmanager
+import pandas as pd
+import paramiko
+import os
+import json
+import requests
+from airflow.utils.email import send_email
+
+# Helper function to get secrets from GCP Secret Manager
+def get_secret(secret_name):
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/<your_project_id>/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(name=name)
+    return response.payload.data.decode("UTF-8")
+
+# Define constants for connection-related information
+SFTP_CONN_ID = get_secret('your_sftp_connection')
+BQ_RAW_TABLE = get_secret('your_bq_raw_table')
+BQ_FINAL_TABLE = get_secret('your_bq_final_table')
+TEAMS_WEBHOOK_URL = get_secret('your_teams_webhook_url')
+EMAIL_RECIPIENTS = json.loads(get_secret('your_email_recipients'))
+
+# Define constants for paths, folders, and bucket names
+SFTP_PATH = os.getenv('SFTP_PATH')
+LOCAL_FILE_PATH = os.getenv('LOCAL_FILE_PATH')  # Local directory path where files will be downloaded
+GCS_BUCKET = os.getenv('GCS_BUCKET')
+GCS_LANDING_FOLDER = os.getenv('GCS_LANDING_FOLDER')
+GCS_ARCHIVE_FOLDER = os.getenv('GCS_ARCHIVE_FOLDER')
+
+# Helper functions
+def download_from_sftp(**kwargs):
+    sftp_client = kwargs['sftp_client']
+    files = sftp_client.listdir(SFTP_PATH)  # List all files in the directory
+    downloaded_files = {}
+    
+    for file_name in files:
+        local_path = os.path.join(LOCAL_FILE_PATH, file_name)
+        sftp_client.get(os.path.join(SFTP_PATH, file_name), local_path)
+        downloaded_files[file_name] = local_path
+    
+    # Store each file path to XCom
+    kwargs['task_instance'].xcom_push(key='downloaded_files', value=downloaded_files)
+
+def upload_to_gcs_landing(**kwargs):
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    ti = kwargs['task_instance']
+    files = ti.xcom_pull(task_ids='download_file', key='downloaded_files')  # Retrieve all file paths from XCom
+    
+    for file_name, local_file_path in files.items():
+        blob = bucket.blob(f'{GCS_LANDING_FOLDER}/{file_name}')
+        blob.upload_from_filename(local_file_path)
+
+def data_check(**kwargs):
+    ti = kwargs['task_instance']
+    files = ti.xcom_pull(task_ids='download_file', key='downloaded_files')
+    
+    for file_name, local_file_path in files.items():
+        try:
+            df = pd.read_csv(local_file_path, sep='\t')
+            # Add more checks if necessary
+        except Exception as e:
+            raise ValueError(f"Data check failed for {file_name}: {e}")
+
+def load_to_bq_raw(**kwargs):
+    client = bigquery.Client()
+    ti = kwargs['task_instance']
+    files = ti.xcom_pull(task_ids='download_file', key='downloaded_files')
+    
+    for file_name in files.keys():
+        uri = f'gs://{GCS_BUCKET}/{GCS_LANDING_FOLDER}/{file_name}'
+        table_id = BQ_RAW_TABLE
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.CSV,
+            skip_leading_rows=1,
+            autodetect=True,
+        )
+        load_job = client.load_table_from_uri(uri, table_id, job_config=job_config)
+        load_job.result()
+
+def get_unique_partition_dates(**kwargs):
+    client = bigquery.Client()
+    query = f"""
+        SELECT DISTINCT DATE(partition_col) AS partition_date
+        FROM `{BQ_RAW_TABLE}`
+    """
+    df = client.query(query).to_dataframe()
+    return df['partition_date'].tolist()
+
+def create_processing_task(partition_date):
+    return BigQueryExecuteQueryOperator(
+        task_id=f'process_data_{partition_date}',
+        sql=f"""
+            INSERT INTO `{BQ_FINAL_TABLE}` (employee_id, employee_name, partition_date)
+            SELECT employee_id, employee_name, DATE(partition_col) AS partition_date
+            FROM `{BQ_RAW_TABLE}`
+            WHERE DATE(partition_col) = '{partition_date}'
+        """,
+        use_legacy_sql=False
+    )
+
+def generate_processing_tasks(**kwargs):
+    unique_dates = kwargs['task_instance'].xcom_pull(task_ids='get_unique_partition_dates')
+    task_group = kwargs['task_group']
+    for date in unique_dates:
+        task = create_processing_task(date)
+        task_group.add(task)
+
+def send_teams_message(message):
+    headers = {'Content-Type': 'application/json'}
+    data = {'text': message}
+    response = requests.post(TEAMS_WEBHOOK_URL, headers=headers, data=json.dumps(data))
+    response.raise_for_status()
+
+def notify_failure(context):
+    task_id = context.get('task_instance').task_id
+    exception = context.get('exception')
+    error_message = f'Task {task_id} failed with exception: {exception}'
+    
+    # Send Email Notification
+    send_email(
+        to=EMAIL_RECIPIENTS,
+        subject=f'Airflow Task Failed: {task_id}',
+        html_content=error_message
+    )
+    
+    # Send Teams Notification
+    send_teams_message(error_message)
+
+def archive_file_to_gcs(**kwargs):
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET)
+    ti = kwargs['task_instance']
+    files = ti.xcom_pull(task_ids='download_file', key='downloaded_files')
+    
+    for file_name in files.keys():
+        source_blob = bucket.blob(f'{GCS_LANDING_FOLDER}/{file_name}')
+        destination_blob = bucket.blob(f'{GCS_ARCHIVE_FOLDER}/{file_name}')
+        bucket.copy_blob(source_blob, bucket, destination_blob.name)
+        source_blob.delete()
+
+def delete_raw_table_data(**kwargs):
+    client = bigquery.Client()
+    query = f"DELETE FROM `{BQ_RAW_TABLE}` WHERE TRUE"
+    client.query(query).result()
+
+# Define the DAG
+with DAG(
+    'sftp_to_bq_processing_dynamic',
+    default_args={
+        'owner': '<your_name>',
+        'start_date': days_ago(1),
+        'retries': 1,
+        'on_failure_callback': notify_failure
+    },
+    schedule_interval=None,
+    catchup=False
+) as dag:
+
+    # Task to sense the presence of the file in SFTP
+    sftp_sensor = SFTPSensor(
+        task_id='sftp_file_sensor',
+        sftp_conn_id=SFTP_CONN_ID,
+        path=SFTP_PATH,
+        mode='poke',
+        timeout=600,
+        poke_interval=60
+    )
+
+    # Task to download files from SFTP
+    download_task = PythonOperator(
+        task_id='download_file',
+        python_callable=download_from_sftp,
+        op_kwargs={'sftp_client': paramiko.SFTPClient.from_transport(paramiko.Transport(('<hostname>', <port>)))}
+    )
+
+    # Task to upload files to GCS landing folder
+    upload_to_gcs_landing_task = PythonOperator(
+        task_id='upload_to_gcs_landing',
+        python_callable=upload_to_gcs_landing
+    )
+
+    # Task to check if the data is corrupted
+    data_check_task = PythonOperator(
+        task_id='data_check',
+        python_callable=data_check
+    )
+
+    # Task to load data into raw BigQuery table
+    load_raw_bq_task = PythonOperator(
+        task_id='load_to_bq_raw',
+        python_callable=load_to_bq_raw
+    )
+
+    # Task to get unique partition dates from BigQuery
+    get_dates_task = PythonOperator(
+        task_id='get_unique_partition_dates',
+        python_callable=get_unique_partition_dates,
+        provide_context=True
+    )
+
+    # Dynamically generate tasks based on unique partition dates
+    with TaskGroup('process_by_date', group_id='process_by_date') as process_by_date_group:
+        generate_tasks = PythonOperator(
+            task_id='generate_processing_tasks',
+            python_callable=generate_processing_tasks,
+            provide_context=True,
+            op_kwargs={'task_group': process_by_date_group}
+        )
+
+    # Task to archive the file to the GCS archive folder
+    archive_file_task = PythonOperator(
+        task_id='archive_file_to_gcs',
+        python_callable=archive_file_to_gcs
+    )
+
+    # Task to delete data from raw table after processing
+    delete_raw_task = PythonOperator(
+        task_id='delete_raw_table_data',
+        python_callable=delete_raw_table_data
+    )
+
+    # Set up task dependencies
+    sftp_sensor >> download_task >> upload_to_gcs_landing_task >> data_check_task >> load_raw_bq_task >> get_dates_task >> generate_tasks >> delete_raw_task >> archive_file_task
+```
+
+### Key Changes:
+1. **Multi-file Handling**: The code now lists all files in the SFTP directory and processes each one independently.
+2. **XComs**: File paths are stored and retrieved using XCom, allowing subsequent tasks to access the list of files.
+3. **Task Iteration**: Each task that deals with file processing loops over the list of files retrieved from the SFTP server.
+
+This setup ensures that the DAG processes each file in the SFTP directory individually, handling scenarios where multiple files (e.g., `abc` and `def
