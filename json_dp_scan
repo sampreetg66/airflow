@@ -1,0 +1,97 @@
+To achieve this, you can write an Airflow DAG that reads the JSON file from Google Cloud Storage (GCS) and then passes the JSON content to the `rules` in the `DataQualitySpec`. Here's how you can structure the code:
+
+1. **GCS to JSON Reader**: Use a task to read the JSON file from GCS.
+2. **Data Processing**: Parse the JSON and pass it to the `rules` field.
+3. **Data Scan Task**: Use the parsed data in your `DataplexCreateOrUpdateDataQualityScanOperator`.
+
+Below is an example Airflow DAG:
+
+```python
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from google.cloud import dataplex_v1
+from google.cloud.dataplex_v1 import DataQualitySpec
+from airflow.providers.google.cloud.operators.dataplex import DataplexCreateOrUpdateDataQualityScanOperator
+import json
+from datetime import datetime
+
+# Constants
+PROJECT_ID = "your-project-id"
+REGION = "your-region"
+LAKE_ID = "your-lake-id"
+ZONE_ID = "your-zone-id"
+DATASET = "your-dataset"
+TABLE_1 = "your-table"
+DATA_SCAN_ID = "your-data-scan-id"
+GCS_BUCKET = "your-bucket-name"
+GCS_OBJECT_NAME = "path/to/your/json/file.json"
+
+default_args = {
+    "start_date": datetime(2024, 1, 1),
+}
+
+def read_json_from_gcs(bucket_name, object_name):
+    hook = GCSHook()
+    json_data = hook.download(bucket_name, object_name)
+    return json.loads(json_data)
+
+def create_data_scan_task(**kwargs):
+    rules = kwargs['ti'].xcom_pull(task_ids='read_json')
+
+    EXAMPLE_DATA_SCAN = dataplex_v1.DataScan()
+    EXAMPLE_DATA_SCAN.data.entity = (
+        f"projects/{PROJECT_ID}/locations/{REGION}/lakes/{LAKE_ID}/zones/{ZONE_ID}/entities/{TABLE_1}"
+    )
+    EXAMPLE_DATA_SCAN.data.resource = (
+        f"//bigquery.googleapis.com/projects/{PROJECT_ID}/datasets/{DATASET}/tables/{TABLE_1}"
+    )
+    EXAMPLE_DATA_SCAN.data_quality_spec = DataQualitySpec(
+        {
+            "rules": rules,  # Use the rules from the JSON file
+        }
+    )
+
+    # Create the Data Scan task
+    create_data_scan = DataplexCreateOrUpdateDataQualityScanOperator(
+        task_id="create_data_scan",
+        project_id=PROJECT_ID,
+        region=REGION,
+        body=EXAMPLE_DATA_SCAN,
+        data_scan_id=DATA_SCAN_ID,
+    )
+    create_data_scan.execute(context=kwargs)
+
+with DAG(
+    dag_id="gcs_to_dataplex_scan_dag",
+    default_args=default_args,
+    schedule_interval=None,
+    catchup=False,
+) as dag:
+
+    read_json = PythonOperator(
+        task_id="read_json",
+        python_callable=read_json_from_gcs,
+        op_args=[GCS_BUCKET, GCS_OBJECT_NAME],
+    )
+
+    create_scan = PythonOperator(
+        task_id="create_scan",
+        python_callable=create_data_scan_task,
+        provide_context=True,
+    )
+
+    read_json >> create_scan
+```
+
+### Explanation:
+
+1. **read_json_from_gcs**: This function reads the JSON file from GCS using `GCSHook` and returns the parsed JSON.
+
+2. **create_data_scan_task**: This function pulls the JSON data from the XCom (shared data between tasks in Airflow) and uses it to populate the `rules` field in the `DataQualitySpec`.
+
+3. **DAG Structure**:
+   - `read_json`: Reads the JSON file from GCS.
+   - `create_scan`: Uses the JSON data to create the Dataplex data quality scan.
+
+Ensure you have the necessary permissions set up for accessing GCS and Dataplex in your Airflow environment.
