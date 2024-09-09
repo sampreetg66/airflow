@@ -1,0 +1,60 @@
+To achieve this in BigQuery, the steps would involve:
+
+1. **Reading the entire CSV row into a single column** in `table_ext`.
+2. **Parsing the single column into multiple columns** in a `table_raw` using the logic you described.
+
+### Approach:
+1. **Create `table_ext`**: This table will store the entire CSV row as a single column.
+2. **Create a query to parse the data from `table_ext` into `table_raw`**: You will parse the data into separate columns.
+
+### Steps:
+
+#### Step 1: Create an External Table (`table_ext`)
+You can create an external table in BigQuery from the CSV file (assuming it's stored in Google Cloud Storage). The CSV file should be read into a single column.
+
+```sql
+CREATE OR REPLACE EXTERNAL TABLE `project_id.dataset.table_ext`
+OPTIONS (
+  format = 'CSV',
+  uris = ['gs://your-bucket/path-to-your-file.csv'],
+  skip_leading_rows = 0,
+  field_delimiter = '\n',  -- Read the entire row as a single column
+  autodetect = FALSE
+);
+```
+This external table will read the entire row into a single column. The column will likely be named something like `column_1`.
+
+#### Step 2: Parse the Row in `table_ext` and Write to `table_raw`
+Now that you have the data in `table_ext`, you can parse the rows and write them into `table_raw`.
+
+```sql
+-- Create table_raw to store parsed data
+CREATE OR REPLACE TABLE `project_id.dataset.table_raw` AS
+SELECT
+  REPLACE(SPLIT(column_1, ',')[OFFSET(0)], '"', '') AS col1,
+  REPLACE(SPLIT(column_1, ',')[OFFSET(1)], '"', '') AS col2,
+  REPLACE(SPLIT(column_1, ',')[OFFSET(2)], '"', '') AS col3
+FROM
+  `project_id.dataset.table_ext`;
+```
+
+### Explanation:
+1. **`table_ext`**: Contains the entire CSV row in one column (`column_1`).
+2. **`SPLIT(column_1, ',')`**: Splits the single column data into an array based on the comma delimiter.
+3. **`REPLACE(..., '"', '')`**: Removes any double quotes.
+4. **`OFFSET(n)`**: Extracts the n-th value from the split array to populate each column.
+
+### Example:
+For a CSV with data:
+```
+"ab","c","def","ghi"
+```
+
+The process will result in:
+```
+col1 | col2 | col3
+-----|------|-----
+ab   | c    | def
+``` 
+
+You can adapt the query to handle more columns or different delimiters as needed.
