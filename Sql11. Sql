@@ -1,0 +1,6 @@
+-- Concatenate all columns into a single column
+CREATE OR REPLACE TABLE `project_id.dataset.table_ext_single_column` AS
+SELECT
+  CONCAT(column_1, ',', column_2, ',', column_3, ',', column_4) AS single_column -- adjust the number of columns
+FROM
+  `project_id.dataset.table_ext`;
