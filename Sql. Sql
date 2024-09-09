@@ -1,0 +1,9 @@
+WITH example_data AS (
+  SELECT '"ab","c","def","ghi"' AS example_string
+)
+
+SELECT
+  REPLACE(SPLIT(example_string, ',')[OFFSET(0)], '"', '') AS col1,
+  REPLACE(SPLIT(example_string, ',')[OFFSET(1)], '"', '') AS col2,
+  REPLACE(SPLIT(example_string, ',')[OFFSET(2)], '"', '') AS col3
+FROM example_data;
