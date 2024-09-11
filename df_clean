@@ -1,0 +1,81 @@
+To accomplish this task using a Dataflow job with Apache Beam, you can create a Python pipeline that reads a file from a Google Cloud Storage (GCS) bucket, processes it line by line according to your requirements, and writes the output to a new file in GCS. The code below outlines the steps for your job:
+
+1. Read the file from GCS.
+2. Replace `","` with a custom `<field_delimiter>`.
+3. Replace all commas and quotes inside fields.
+4. Put each field inside quotes and revert the `<field_delimiter>` back to commas.
+
+Here’s the Apache Beam Python code for this job:
+
+```python
+import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions
+
+# Define your custom field delimiter
+FIELD_DELIMITER = '<field_delimiter>'
+
+def process_line(line):
+    # Step 1: Replace "," with FIELD_DELIMITER
+    modified_line = line.replace('","', FIELD_DELIMITER)
+
+    # Step 2: Split the line by FIELD_DELIMITER and process each field
+    fields = modified_line.split(FIELD_DELIMITER)
+    processed_fields = []
+    for field in fields:
+        # Replace any remaining commas and quotes in each field
+        cleaned_field = field.replace(',', '').replace('"', '')
+        # Enclose the cleaned field with quotes
+        processed_fields.append(f'"{cleaned_field}"')
+
+    # Step 3: Join the processed fields with commas
+    final_line = ','.join(processed_fields)
+    
+    return final_line
+
+def run(input_path, output_path):
+    # Define the pipeline options
+    options = PipelineOptions()
+    
+    # Define the pipeline
+    with beam.Pipeline(options=options) as p:
+        (
+            p
+            | 'Read from GCS' >> beam.io.ReadFromText(input_path)
+            | 'Process each line' >> beam.Map(process_line)
+            | 'Write to GCS' >> beam.io.WriteToText(output_path)
+        )
+
+if __name__ == '__main__':
+    # Define GCS input and output paths
+    input_path = 'gs://your-bucket/input_file.txt'
+    output_path = 'gs://your-bucket/output_file.txt'
+    
+    # Run the pipeline
+    run(input_path, output_path)
+```
+
+### Explanation of the Code:
+1. **`process_line` function**: 
+   - Replaces `","` with `<field_delimiter>`.
+   - Splits each line by the `<field_delimiter>`, processes each field (removing commas and quotes), and encloses the field with quotes.
+   - Joins the processed fields with commas.
+
+2. **Pipeline**:
+   - Reads the input file from GCS using `beam.io.ReadFromText`.
+   - Applies the `process_line` transformation to each line.
+   - Writes the transformed output back to GCS using `beam.io.WriteToText`.
+
+### Steps to Run the Dataflow Job:
+1. Install the necessary dependencies:
+   ```bash
+   pip install apache-beam[gcp]
+   ```
+
+2. Run the script locally or submit it to Dataflow:
+   ```bash
+   python dataflow_job.py
+   ```
+
+   If you want to run this on Dataflow (Google Cloud), add the appropriate `PipelineOptions` like `--runner DataflowRunner`, `--project`, `--temp_location`, etc.
+
+Make sure you update the GCS bucket paths (`input_path` and `output_path`) and set up the correct IAM permissions for Dataflow to read and write from the bucket.
