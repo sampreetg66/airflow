@@ -1,0 +1,14 @@
+To find lines with more than 31 semicolons (`;`), you can use the following regular expression:
+
+```regex
+^(?:[^;]*;){31}[^;]*;.*$
+```
+
+### Explanation:
+- `^` – Asserts the start of the line.
+- `(?:[^;]*;)` – Matches any number of characters that are not semicolons followed by a semicolon. This part is non-capturing.
+- `{31}` – Ensures this pattern repeats 31 times.
+- `[^;]*;` – Matches the 32nd semicolon.
+- `.*$` – Matches the rest of the line (if there are any characters after the 32nd semicolon).
+
+This regex will match lines that contain more than 31 semicolons. If you only want to match lines with exactly 32 semicolons, remove the final `.*`.
