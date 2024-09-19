@@ -1,0 +1,14 @@
+To clear all failed tasks of a DAG in Airflow using the Google Cloud CLI, you can use the following `gcloud` command:
+
+```bash
+gcloud composer environments run <composer-environment-name> \
+  --location <location> dags clear -- \
+  --dag-id abc --only-failed
+```
+
+Replace the following placeholders:
+- `<composer-environment-name>`: Your Composer environment name.
+- `<location>`: The region where your Composer environment is hosted.
+- `abc`: The DAG ID of the DAG for which you want to clear failed tasks.
+
+This command clears all failed tasks for the specified DAG without affecting successful or running tasks.
