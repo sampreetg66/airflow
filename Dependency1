@@ -1,0 +1,81 @@
+If your `get_file_names` task has an input variable, such as `path`, you can pass this argument when calling the task and still ensure that it runs before the BigQuery task. Here’s how you can modify the example to accommodate a `path` parameter for `get_file_names` and still pass the file names to the BigQuery operator.
+
+### Updated Example with `path` as an Input Variable
+
+```python
+from airflow.decorators import dag, task
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from datetime import datetime
+
+@dag(schedule_interval="@daily", start_date=datetime(2023, 1, 1), catchup=False)
+def example_dag():
+
+    # Task 1: TaskFlow operator to get file names from GCS based on a path
+    @task
+    def get_file_names(path: str):
+        # Simulate fetching file names from GCS based on the path
+        # Example logic could be fetching from GCS using Google Cloud Storage client
+        if path == "folder1":
+            file_names = ["file1.csv", "file2.csv"]
+        elif path == "folder2":
+            file_names = ["file3.csv", "file4.csv"]
+        else:
+            file_names = []
+        return file_names
+
+    # Task 2: BigQuery Operator that processes the file names
+    bigquery_task = BigQueryInsertJobOperator(
+        task_id="run_bigquery_query",
+        configuration={
+            "query": {
+                "query": "SELECT * FROM `your_project.your_dataset.your_table` WHERE file_name IN UNNEST(@file_names)",
+                "useLegacySql": False,
+                "queryParameters": [
+                    {
+                        "name": "file_names",
+                        "parameterType": {"type": "ARRAY", "arrayType": {"type": "STRING"}},
+                        "parameterValue": {"arrayValues": [{"value": name} for name in "{{ ti.xcom_pull(task_ids='get_file_names') }}"]}
+                    }
+                ]
+            }
+        },
+        location='US',
+    )
+
+    # Define the path variable (this could come from Airflow variables, environment variables, etc.)
+    path = "folder1"  # Example path
+
+    # Call task 1 with the path as input
+    t1 = get_file_names(path=path)
+
+    # Set dependencies (ensure task_1 runs before task_2)
+    t1 >> bigquery_task
+
+example_dag = example_dag()
+```
+
+### Key Adjustments:
+
+1. **`get_file_names` with Path Input**:
+   - The `get_file_names` function now accepts a `path` parameter. It can use this parameter to determine which files to fetch (e.g., from GCS based on the folder or path).
+
+2. **Task Definition**:
+   - When calling `get_file_names()`, you pass the `path` as an argument. This can be a static value (as shown) or dynamically set (from Airflow variables, environment variables, etc.).
+
+3. **BigQuery Operator**:
+   - The `BigQueryInsertJobOperator` still uses the output from `get_file_names`, which now depends on the `path`. The result is passed via XComs to the BigQuery task.
+
+4. **Dependency**:
+   - The `t1 >> bigquery_task` dependency ensures that the `get_file_names` task (with the path input) runs before the BigQuery task.
+
+### Dynamic Path Handling:
+If you need to dynamically handle different paths (for example, coming from environment variables), you can use Airflow's environment variables to pass the path:
+
+```python
+from airflow.models import Variable
+path = Variable.get("gcs_path", default_var="folder1")
+```
+
+You can also modify the logic inside `get_file_names()` to fetch real files from Google Cloud Storage, for example using the `google-cloud-storage` Python client.
+
+This setup ensures that `task_1` runs with a given `path`, fetches the correct files, and passes them to the BigQuery task. Let me know if you'd like further clarification or assistance!
