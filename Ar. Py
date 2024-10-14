@@ -1,0 +1,107 @@
+To move files from a source to a destination folder in Google Cloud Storage using the `GCSToGCSOperator` based on the `failed_files` list retrieved from XCom, here’s how you can do it:
+
+### Updated Workflow Using `GCSToGCSOperator`
+
+1. **In the first Python file**:
+   - Capture and push the `failed_files` list to XCom as before.
+
+2. **In the second Python file**:
+   - Pull the `failed_files` list from XCom.
+   - Dynamically create and trigger the `GCSToGCSOperator` to move each failed file from its source folder to a destination folder in Google Cloud Storage.
+
+### Step-by-step implementation:
+
+#### Step 1: Pushing `failed_files` to XCom in the first Python file
+
+In the first task, after processing and catching failures, push the `failed_files` to XCom:
+
+```python
+from airflow.models import TaskInstance
+
+# Inside the task where file processing happens
+try:
+    # Your existing code to process files
+    ...
+except Exception as e:
+    file_uri = prepared_paths["file_uri"]
+    file_name = file_uri.split('/')[-1]  # Extract file name from the URI
+    failed_files.append(file_name)
+    print(f"Failed to process file: {file_name}, Error: {str(e)}")
+
+# Push `failed_files` to XCom after processing
+task_instance.xcom_push(key='failed_files', value=failed_files)
+```
+
+#### Step 2: Pulling `failed_files` and using `GCSToGCSOperator` to move files
+
+In your second Python file, you can pull the `failed_files` list from XCom and use the `GCSToGCSOperator` to move files from the source to the destination.
+
+```python
+from airflow.providers.google.cloud.transfers.gcs_to_gcs import GCSToGCSOperator
+from airflow.models import TaskInstance
+from airflow.operators.python_operator import PythonOperator
+
+# Define a function to pull the `failed_files` from XCom and move them
+def move_failed_files(**kwargs):
+    ti = kwargs['ti']
+    failed_files = ti.xcom_pull(key='failed_files')
+
+    if not failed_files:
+        print("No failed files to move.")
+        return
+
+    source_bucket = "your_source_bucket"
+    destination_bucket = "your_destination_bucket"
+    source_folder = "your/source/folder"
+    destination_folder = "your/destination/folder"
+
+    for file_name in failed_files:
+        # Define the source and destination object paths
+        source_object = f"{source_folder}/{file_name}"
+        destination_object = f"{destination_folder}/{file_name}"
+
+        # Use GCSToGCSOperator to move the file
+        move_task = GCSToGCSOperator(
+            task_id=f"move_{file_name}",
+            source_bucket=source_bucket,
+            source_object=source_object,
+            destination_bucket=destination_bucket,
+            destination_object=destination_object,
+            move_object=True,  # Set to True to move (instead of copy)
+        )
+        move_task.execute(context=kwargs)
+
+# Define your Airflow task to move failed files
+move_files_task = PythonOperator(
+    task_id="move_failed_files_task",
+    python_callable=move_failed_files,
+    provide_context=True,
+)
+```
+
+### Explanation:
+- **XCom Pulling**: The `move_failed_files` function pulls the `failed_files` from XCom using `ti.xcom_pull()`.
+- **GCSToGCSOperator**: For each file in `failed_files`, the `GCSToGCSOperator` is used to move the file from the source folder to the destination folder in GCS.
+  - `source_object`: Defines the full path of the file in the source folder.
+  - `destination_object`: Defines the full path of the file in the destination folder.
+  - `move_object=True`: Moves the file (instead of copying it).
+
+### DAG Example:
+In your DAG, make sure that the task for moving files is downstream from the task that processes the files and pushes `failed_files` to XCom.
+
+```python
+# In your DAG definition
+
+process_task >> move_files_task
+```
+
+This way, `move_files_task` will only execute after `process_task` completes, and it will move any files listed in the `failed_files` list.
+
+### Optional: Handle Empty `failed_files`
+You can skip the move task if `failed_files` is empty by adding a check at the start of the `move_failed_files` function.
+
+### Additional Notes:
+- Make sure your Airflow environment is set up with the necessary Google Cloud connections (`google_cloud_default` by default).
+- The `GCSToGCSOperator` moves files in GCS without downloading them, which is efficient.
+
+Let me know if you need further clarification or adjustments!
