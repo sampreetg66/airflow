@@ -6,3 +6,10 @@ SELECT
   ) AS extracted_string
 FROM
   your_table
+
+
+SELECT
+  col1,
+  REVERSE(REGEXP_EXTRACT(REVERSE(col1), r"(.*)\s*cba")) AS right_side_of_last_abc
+FROM
+  your_table
