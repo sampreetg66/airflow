@@ -1,0 +1,8 @@
+SELECT
+  col1,
+  REGEXP_EXTRACT(
+    col1,
+    r"(?i)WHERE\s+(.*)(?=;)(?!.*(?i)WHERE\s+)"
+  ) AS extracted_string
+FROM
+  your_table
