@@ -1,0 +1,36 @@
+The updated query will indeed capture the last `WHERE` clause, regardless of how many `WHERE` clauses are in the string. This is because we can force the regex to start looking from the end of the string, essentially backtracking to the final `WHERE`.
+
+However, regular expressions alone can be tricky with complex SQL queries in text. If we need the most reliable way to capture the last `WHERE` clause, we can use `REGEXP_REVERSE` (if available in your BigQuery dialect) or manipulate with `SPLIT` and `ARRAY` functions to simplify the extraction process.
+
+Here’s the approach with `SPLIT` and `ARRAY`:
+
+```sql
+SELECT
+  col1,
+  SPLIT(col1, r'(?i)WHERE')[
+    OFFSET(ARRAY_LENGTH(SPLIT(col1, r'(?i)WHERE')) - 1)
+  ] AS extracted_string
+FROM
+  your_table
+```
+
+### Explanation:
+- `SPLIT(col1, r'(?i)WHERE')`: Splits `col1` on each `WHERE` (ignoring case), creating an array of substrings split at each `WHERE`.
+- `ARRAY_LENGTH(...)-1`: Gets the last element’s index in the array, which corresponds to the text after the last `WHERE`.
+- The result will be the part after the final `WHERE` until the end of the string.
+
+If there's a trailing `;`, you can add an extra `REPLACE` to remove it:
+
+```sql
+SELECT
+  col1,
+  REPLACE(
+    SPLIT(col1, r'(?i)WHERE')[
+      OFFSET(ARRAY_LENGTH(SPLIT(col1, r'(?i)WHERE')) - 1)
+    ], ';', ''
+  ) AS extracted_string
+FROM
+  your_table
+```
+
+This solution is efficient even if there are multiple `WHERE` clauses, and it handles the last one precisely.
