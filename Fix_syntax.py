@@ -10,7 +10,7 @@ def fix_syntax_errors(file_path):
     closing = {")": "(", "]": "[", "}": "{"}
 
     fixed_lines = []
-    open_string = None  # To track unclosed string literals
+    open_string = None  # Track unclosed string literals
     inside_multiline_string = False  # Track if inside a multi-line string
     multiline_string_delimiter = None  # Store the delimiter type (''' or """)
     previous_line_continued = False  # Track if the previous line ended with '\'
@@ -18,7 +18,7 @@ def fix_syntax_errors(file_path):
     for i, line in enumerate(lines):
         original_line = line.rstrip("\n")
 
-        # Detect missing colons in control structures
+        # Fix missing colons in control structures
         if re.match(r"^\s*(if|elif|else|for|while|def|class) .*[^:]\s*$", original_line):
             original_line += ":"
 
@@ -28,6 +28,11 @@ def fix_syntax_errors(file_path):
         if spaces % 4 != 0:
             spaces = (spaces // 4) * 4
         corrected_line = " " * spaces + stripped
+
+        # Detect and close function calls before .cache()
+        match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", corrected_line)
+        if match:
+            corrected_line = corrected_line.replace(".cache()", ") .cache()")
 
         # Detect triple-quoted strings (""" or ''')
         triple_quote_match = re.findall(r'("""|\'\'\')', corrected_line)
@@ -97,4 +102,4 @@ def fix_syntax_in_folder(folder_path):
 if __name__ == "__main__":
     folder_path = "path/to/your/folder"  # Change this to your folder path
     fix_syntax_in_folder(folder_path)
-        
+    
