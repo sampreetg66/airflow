@@ -6,38 +6,38 @@ def fix_syntax_errors(file_path):
         lines = f.readlines()
 
     fixed_lines = []
-    temp_line = ""  # Holds multi-line expressions
+    temp_lines = []  # Stores multi-line statement
     inside_multiline = False  # Tracks if inside a multi-line expression
 
     for line in lines:
-        original_line = line.rstrip("\n")
+        stripped_line = line.rstrip("\n")
 
         # Handle line continuation (backslash `\`)
-        if original_line.endswith("\\"):
-            temp_line += original_line.rstrip("\\")  # Append without the backslash
+        if stripped_line.endswith("\\"):
+            temp_lines.append(stripped_line)  # Store multi-line parts
             inside_multiline = True
-            continue  # Skip adding to fixed_lines until we have a complete expression
+            continue  # Wait until the full expression is collected
 
         if inside_multiline:
-            temp_line += original_line  # Append continued line
-            inside_multiline = False  # End multi-line tracking
-            corrected_line = temp_line
-            temp_line = ""  # Reset temp storage
+            temp_lines.append(stripped_line)  # Append the last part
+            full_line = "\n".join(temp_lines)  # Preserve multi-line formatting
+            inside_multiline = False  # Reset flag
+            temp_lines = []  # Reset storage
         else:
-            corrected_line = original_line
+            full_line = stripped_line
 
         # Fix function calls before `.cache()`
-        match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", corrected_line)
+        match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", full_line)
         if match:
             # Count open and close parentheses
-            open_count = corrected_line.count("(")
-            close_count = corrected_line.count(")")
+            open_count = full_line.count("(")
+            close_count = full_line.count(")")
             missing_closures = open_count - close_count
 
             if missing_closures > 0:
-                corrected_line = re.sub(r"(\.cache\(\))", ")" * missing_closures + r"\1", corrected_line)
+                full_line = re.sub(r"(\.cache\(\))", ")" * missing_closures + r"\1", full_line)
 
-        fixed_lines.append(corrected_line)
+        fixed_lines.append(full_line)
 
     # Overwrite the original file
     with open(file_path, "w") as f:
@@ -57,7 +57,4 @@ def fix_syntax_in_folder(folder_path):
                 fix_syntax_errors(file_path)
 
 # Example usage
-if __name__ == "__main__":
-    folder_path = "path/to/your/folder"  # Change this to your folder path
-    fix_syntax_in_folder(folder_path)
-    
+if __name__ == "__
