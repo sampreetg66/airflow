@@ -5,43 +5,28 @@ def fix_syntax_errors(file_path):
     with open(file_path, "r") as f:
         lines = f.readlines()
 
-    stack = []  # Track open parentheses
     fixed_lines = []
-    inside_multiline_string = False  # Track if inside a multi-line string
-    multiline_string_delimiter = None  # Store the delimiter type (''' or """)
-    previous_line_continued = False  # Track if the previous line ended with '\'
+    temp_line = ""  # Holds multi-line expressions
+    inside_multiline = False  # Tracks if inside a multi-line expression
 
     for line in lines:
         original_line = line.rstrip("\n")
-        corrected_line = original_line
 
-        # Fix missing colons in control structures
-        if re.match(r"^\s*(if|elif|else|for|while|def|class) .*[^:]\s*$", corrected_line):
-            corrected_line += ":"
+        # Handle line continuation (backslash `\`)
+        if original_line.endswith("\\"):
+            temp_line += original_line.rstrip("\\")  # Append without the backslash
+            inside_multiline = True
+            continue  # Skip adding to fixed_lines until we have a complete expression
 
-        # Detect triple-quoted strings (""" or ''')
-        triple_quote_match = re.findall(r'("""|\'\'\')', corrected_line)
-        if triple_quote_match:
-            delimiter = triple_quote_match[0]
-            if inside_multiline_string and delimiter == multiline_string_delimiter:
-                inside_multiline_string = False  # Closing a multi-line string
-                multiline_string_delimiter = None
-            else:
-                inside_multiline_string = True  # Opening a multi-line string
-                multiline_string_delimiter = delimiter
+        if inside_multiline:
+            temp_line += original_line  # Append continued line
+            inside_multiline = False  # End multi-line tracking
+            corrected_line = temp_line
+            temp_line = ""  # Reset temp storage
+        else:
+            corrected_line = original_line
 
-        # Handle multi-line strings or continued lines
-        if corrected_line.endswith("\\"):
-            previous_line_continued = True
-            fixed_lines.append(corrected_line)
-            continue  # Skip bracket checking for this line
-
-        if inside_multiline_string or previous_line_continued:
-            fixed_lines.append(corrected_line)
-            previous_line_continued = False
-            continue  # Skip bracket checking for this line
-
-        # Detect function calls before `.cache()` and fix parentheses
+        # Fix function calls before `.cache()`
         match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", corrected_line)
         if match:
             # Count open and close parentheses
@@ -50,7 +35,7 @@ def fix_syntax_errors(file_path):
             missing_closures = open_count - close_count
 
             if missing_closures > 0:
-                corrected_line = corrected_line.replace(".cache()", ")" * missing_closures + ".cache()")
+                corrected_line = re.sub(r"(\.cache\(\))", ")" * missing_closures + r"\1", corrected_line)
 
         fixed_lines.append(corrected_line)
 
@@ -75,4 +60,4 @@ def fix_syntax_in_folder(folder_path):
 if __name__ == "__main__":
     folder_path = "path/to/your/folder"  # Change this to your folder path
     fix_syntax_in_folder(folder_path)
-                     
+    
