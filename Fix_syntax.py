@@ -2,36 +2,42 @@ import os
 import re
 import os
 
+import os
+
 def fix_backslash_closure(file_path, log_file):
     with open(file_path, "r") as f:
         lines = f.readlines()
 
-    fixed_lines = []
-    prev_line_ends_with_backslash = False
-    updated_lines = []  # Track modified line numbers
+    fixed_lines = lines[:]  # Copy to modify
+    modified_lines = []  # Track updated line numbers
 
-    for i, line in enumerate(lines):
-        corrected_line = line.rstrip("\n")  # Remove trailing newline
+    i = 0
+    while i < len(lines):
+        if ")." in lines[i]:  
+            # Go back until we find the first non-`\` line
+            backtrack_index = i - 1
+            while backtrack_index >= 0 and lines[backtrack_index].rstrip().endswith("\\"):
+                backtrack_index -= 1
 
-        if prev_line_ends_with_backslash and ")." in corrected_line:
-            corrected_line = corrected_line.replace(").", ")).")
-            updated_lines.append(i + 1)  # Store 1-based line number
+            # The line to check is the one *after* the first non-`\` line
+            check_line_index = backtrack_index + 1
 
-        # Check if the current line ends with a backslash
-        prev_line_ends_with_backslash = corrected_line.endswith("\\")
+            if 0 <= check_line_index < len(lines) and "bqqf(rbq(" in lines[check_line_index]:
+                fixed_lines[i] = fixed_lines[i].replace(").", ")).")
+                modified_lines.append(i + 1)  # Store 1-based line number
 
-        fixed_lines.append(corrected_line)
+        i += 1
 
     # If any changes were made, update the file and log it
-    if updated_lines:
+    if modified_lines:
         with open(file_path, "w") as f:
-            f.writelines(line + "\n" for line in fixed_lines)
+            f.writelines(fixed_lines)
 
         with open(log_file, "a") as log:
             log.write(f"Fixed: {file_path}\n")
-            log.write(f"Modified lines: {updated_lines}\n\n")
+            log.write(f"Modified lines: {modified_lines}\n\n")
 
-        print(f"Fixed: {file_path} (Lines {updated_lines})")
+        print(f"Fixed: {file_path} (Lines {modified_lines})")
 
 def fix_in_folder(folder_path, log_file="fix_log.txt"):
     if not os.path.isdir(folder_path):
@@ -53,6 +59,7 @@ def fix_in_folder(folder_path, log_file="fix_log.txt"):
 if __name__ == "__main__":
     folder_path = "path/to/your/folder"  # Change this to your folder path
     fix_in_folder(folder_path)
+    
     
 
 #...........
