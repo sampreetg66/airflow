@@ -1,19 +1,53 @@
 import os
 import re
-import os
 
-import os
-
-def fix_backslash_closure(file_path, log_file):
+def fix_syntax_errors(file_path):
     with open(file_path, "r") as f:
         lines = f.readlines()
 
-    fixed_lines = lines[:]  # Copy to modify
-    modified_lines = []  # Track updated line numbers
+    fixed_lines = []  # Store corrected lines
+    open_parens_stack = []  # Stack to track open '(' positions
+    inside_multiline_string = False
+    multiline_string_delimiter = None
+    modified_lines = []  # Track modified line numbers
 
     i = 0
     while i < len(lines):
-        if ")." in lines[i]:  
+        corrected_line = lines[i].rstrip("\n")  # Strip newline to avoid extra blank lines
+
+        # Detect multi-line strings (both triple and single/double quotes)
+        triple_quote_match = re.findall(r'("""|\'\'\'|["\'])', corrected_line)
+        if triple_quote_match:
+            delimiter = triple_quote_match[0]
+            if inside_multiline_string and delimiter == multiline_string_delimiter:
+                inside_multiline_string = False
+                multiline_string_delimiter = None
+            else:
+                inside_multiline_string = True
+                multiline_string_delimiter = delimiter
+
+        # If inside a multi-line string, skip syntax fixes
+        if inside_multiline_string:
+            fixed_lines.append(corrected_line)
+            i += 1
+            continue
+
+        # Track open/close parenthesis count across lines
+        open_count = corrected_line.count("(")
+        close_count = corrected_line.count(")")
+        open_parens_stack.append(open_count - close_count)
+
+        # Fix missing closing parentheses before `.cache()`
+        match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", corrected_line)
+        if match:
+            missing_closures = sum(open_parens_stack)  # Count missing `)` to close
+            if missing_closures > 0:
+                corrected_line = re.sub(r"(\.cache\(\))", ")" * missing_closures + r"\1", corrected_line)
+                open_parens_stack.clear()  # Reset stack after fixing
+                modified_lines.append(i + 1)
+
+        # Fix issue where `.cache()` follows a line continued with `\`
+        if ")." in corrected_line:  
             # Go back until we find the first non-`\` line
             backtrack_index = i - 1
             while backtrack_index >= 0 and lines[backtrack_index].rstrip().endswith("\\"):
@@ -22,102 +56,35 @@ def fix_backslash_closure(file_path, log_file):
             # The line to check is the one *after* the first non-`\` line
             check_line_index = backtrack_index + 1
 
-            if 0 <= check_line_index < len(lines) and "bqqf(rbq(" in lines[check_line_index]:
-                fixed_lines[i] = fixed_lines[i].replace(").", ")).")
-                modified_lines.append(i + 1)  # Store 1-based line number
+            if 0 <= check_line_index < len(lines) and "run_bq_query(bq_query_formating(" in lines[check_line_index]:
+                # Count open `(` and closed `)` to see if an extra `)` is needed
+                open_parens = sum(l.count("(") for l in lines[check_line_index:i+1])
+                close_parens = sum(l.count(")") for l in lines[check_line_index:i+1])
 
+                if open_parens > close_parens:  # Only fix if extra `)` is needed
+                    corrected_line = corrected_line.replace(").", ")).")
+                    modified_lines.append(i + 1)
+
+        fixed_lines.append(corrected_line)
         i += 1
 
-    # If any changes were made, update the file and log it
-    if modified_lines:
-        with open(file_path, "w") as f:
-            f.writelines(fixed_lines)
-
-        with open(log_file, "a") as log:
-            log.write(f"Fixed: {file_path}\n")
-            log.write(f"Modified lines: {modified_lines}\n\n")
-
-        print(f"Fixed: {file_path} (Lines {modified_lines})")
-
-def fix_in_folder(folder_path, log_file="fix_log.txt"):
-    if not os.path.isdir(folder_path):
-        print(f"Error: {folder_path} is not a valid directory.")
-        return
-
-    # Clear log file before starting
-    open(log_file, "w").close()
-
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith(".py"):  # Process only Python files
-                file_path = os.path.join(root, file)
-                fix_backslash_closure(file_path, log_file)
-
-    print(f"\n✅ Fixes logged in {log_file}")
-
-# Example usage
-if __name__ == "__main__":
-    folder_path = "path/to/your/folder"  # Change this to your folder path
-    fix_in_folder(folder_path)
-    
-    
-
-#...........
-
-def fix_syntax_errors(file_path):
-    with open(file_path, "r") as f:
-        lines = f.readlines()
-
-    fixed_lines = []
-    temp_lines = []  # Stores multi-line statement
-    inside_multiline = False  # Tracks if inside a multi-line expression
-
-    for line in lines:
-        stripped_line = line.rstrip("\n")
-
-        # Handle line continuation (backslash `\`)
-        if stripped_line.endswith("\\"):
-            temp_lines.append(stripped_line)  # Store multi-line parts
-            inside_multiline = True
-            continue  # Wait until the full expression is collected
-
-        if inside_multiline:
-            temp_lines.append(stripped_line)  # Append the last part
-            full_line = "\n".join(temp_lines)  # Preserve multi-line formatting
-            inside_multiline = False  # Reset flag
-            temp_lines = []  # Reset storage
-        else:
-            full_line = stripped_line
-
-        # Fix function calls before `.cache()`
-        match = re.search(r"(\w+\s*=\s*[\w_]+\s*\([^\)]*)\.cache\(\)", full_line)
-        if match:
-            # Count open and close parentheses
-            open_count = full_line.count("(")
-            close_count = full_line.count(")")
-            missing_closures = open_count - close_count
-
-            if missing_closures > 0:
-                full_line = re.sub(r"(\.cache\(\))", ")" * missing_closures + r"\1", full_line)
-
-        fixed_lines.append(full_line)
-
-    # Overwrite the original file
+    # Save fixed content
     with open(file_path, "w") as f:
         f.writelines(line + "\n" for line in fixed_lines)
 
-    print(f"Fixed: {file_path}")
-
-def fix_syntax_in_folder(folder_path):
-    if not os.path.isdir(folder_path):
-        print(f"Error: {folder_path} is not a valid directory.")
-        return
-
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith(".py"):  # Process only Python files
-                file_path = os.path.join(root, file)
-                fix_syntax_errors(file_path)
+    # Log changes
+    if modified_lines:
+        log_file = r"<log_file_path>"  # Set the correct log path
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)  # Ensure directory exists
+            with open(log_file, "a") as log:
+                log.write(f"Fixed: {file_path}\n")
+                log.write(f"Modified lines: {modified_lines}\n\n")
+            print(f"Fixed: {file_path} (Lines {modified_lines})")
+        except Exception as e:
+            print(f"Error writing to log file: {e}")
 
 # Example usage
-if __name__ == "__
+if __name__ == "__main__":
+    file_path = r"..\test.py"  # Change this
+    fix_syntax_errors(file_path)
