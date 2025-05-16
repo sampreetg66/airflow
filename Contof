@@ -1,0 +1,34 @@
+import re
+
+def convert_concat_to_fstring(code: str) -> str:
+    # Flatten multi-line continuations
+    code = re.sub(r'\\\s*\n', '', code)
+
+    # Match any string + var expression, not just assignments
+    pattern = re.compile(
+        r'((?:\w+\s*=\s*|print\s*\(|return\s+|)\s*)((?:"(?:[^"\\]|\\.)*"|\'.*?\'|\w+\(.*?\)|\w+)\s*\+\s*)+(?:"(?:[^"\\]|\\.)*"|\'.*?\'|\w+\(.*?\)|\w+)'
+    )
+
+    def repl(match):
+        prefix = match.group(1)
+        expr = match.group(0)[len(prefix):]
+        parts = [p.strip() for p in re.split(r'\s*\+\s*', expr)]
+        fstring_parts = []
+        for part in parts:
+            if re.match(r'^["\'].*["\']$', part):  # String literal
+                fstring_parts.append(eval(part))  # convert literal safely
+            else:
+                fstring_parts.append(f'{{{part}}}')
+        return prefix + f'f"' + ''.join(fstring_parts) + '"'
+
+    return pattern.sub(repl, code)
+
+# Run the conversion
+with open("input.py", "r") as infile:
+    original = infile.read()
+
+converted = convert_concat_to_fstring(original)
+
+with open("converted_output.py", "w") as outfile:
+    outfile.write(converted)
+
