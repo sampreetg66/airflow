@@ -1,60 +1,30 @@
-Yes, you **can absolutely pass a dictionary** from Airflow Variables instead of retrieving each variable one by one. This is a clean and scalable approach, especially when you have multiple parameters.
+Here's your updated Airflow DAG with:
+
+✅ A **TaskGroup** called `preprocessor`
+✅ A `start` dummy task before the group
+✅ An `end` dummy task after the group
+✅ Both `prepare_sql_task` and `run_bq_job` moved inside the `preprocessor` group
 
 ---
 
-## ✅ Step-by-Step: Use a Dictionary from Airflow Variable
-
-### 🔧 1. **Set a dictionary in Airflow Variables**
-
-You can store a JSON-style dictionary in the UI or CLI:
-
-#### Option A: Airflow UI
-
-Go to **Admin → Variables**
-Key: `bq_config`
-Value:
-
-```json
-{
-  "project_id": "your-gcp-project-id",
-  "dataset": "your_dataset_name",
-  "region": "us-west1"
-}
-```
-
-#### Option B: Airflow CLI
-
-```bash
-airflow variables set bq_config '{"project_id": "your-gcp-project-id", "dataset": "your_dataset_name", "region": "us-west1"}'
-```
-
----
-
-### 🛠️ 2. **Update your DAG code**
-
-Here’s how to update your `PythonOperator` to use the whole dict:
+### ✅ Full DAG Code
 
 ```python
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
+from airflow.operators.empty import EmptyOperator
 from airflow.utils.dates import days_ago
+from airflow.utils.task_group import TaskGroup
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 
-from google.cloud import bigquery
-import json
-
-def run_bq_query_from_gcs(**context):
-    # Load config dict from Airflow Variables
+def prepare_query(**context):
     config = Variable.get("bq_config", deserialize_json=True)
-
     project_id = config["project_id"]
     dataset = config["dataset"]
+    run_date = context['ds']
 
-    # Airflow macro value
-    run_date = context['ds']  # e.g. '2025-06-04'
-
-    # Read SQL from GCS
     gcs_hook = GCSHook()
     sql_bytes = gcs_hook.download(
         bucket_name="your-bucket-name",
@@ -62,7 +32,6 @@ def run_bq_query_from_gcs(**context):
     )
     sql_template = sql_bytes.decode("utf-8")
 
-    # Replace placeholders
     sql = (
         sql_template
         .replace("{{ project_id }}", project_id)
@@ -70,40 +39,47 @@ def run_bq_query_from_gcs(**context):
         .replace("{{ ds }}", run_date)
     )
 
-    # Run SQL using BigQuery client
-    client = bigquery.Client(project=project_id)
-    query_job = client.query(sql)
-    results = query_job.result()
-
-    # Optional: log output
-    for row in results:
-        print(dict(row))
+    context['ti'].xcom_push(key="rendered_sql", value=sql)
+    context['ti'].xcom_push(key="project_id", value=project_id)
 
 with DAG(
-    dag_id="bq_query_from_gcs_python_op",
+    dag_id="bq_query_with_task_group",
     schedule_interval="@daily",
     start_date=days_ago(1),
     catchup=False,
 ) as dag:
 
-    run_query_task = PythonOperator(
-        task_id="run_bq_query",
-        python_callable=run_bq_query_from_gcs,
-        provide_context=True
-    )
+    start = EmptyOperator(task_id="start")
+
+    with TaskGroup(group_id="preprocessor") as preprocessor:
+        prepare_sql_task = PythonOperator(
+            task_id="prepare_sql",
+            python_callable=prepare_query,
+        )
+
+        run_bq_job = BigQueryInsertJobOperator(
+            task_id="run_bq_sql_job",
+            configuration={
+                "query": {
+                    "query": "{{ ti.xcom_pull(task_ids='preprocessor.prepare_sql', key='rendered_sql') }}",
+                    "useLegacySql": False,
+                }
+            },
+            project_id="{{ ti.xcom_pull(task_ids='preprocessor.prepare_sql', key='project_id') }}",
+            location="US",  # Optional: use Variable or config if dynamic
+        )
+
+        prepare_sql_task >> run_bq_job
+
+    end = EmptyOperator(task_id="end")
+
+    start >> preprocessor >> end
 ```
 
 ---
 
-## ✅ Why This Is Better
+Let me know if you’d like to:
 
-| Benefit              | Explanation                              |
-| -------------------- | ---------------------------------------- |
-| Clean and scalable   | Avoids repetitive `Variable.get()` calls |
-| Easy config changes  | Update in one place via UI or CLI        |
-| Reusable across DAGs | Share `bq_config` in multiple workflows  |
-| Supports nesting     | You can structure more complex configs   |
-
----
-
-Let me know if you'd like to combine this with **Jinja2 template rendering** (instead of manual `.replace()`), which can also be clean for larger SQL templates.
+* Add more SQL files to process in the same group
+* Dynamically generate tasks based on a list
+* Use `params` with native Jinja templating instead of `.replace()`
