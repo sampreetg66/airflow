@@ -1,18 +1,38 @@
-Yes, absolutely — you can do **everything** (read SQL from GCS, inject parameters, run it via BigQuery client) inside a **PythonOperator** using the native **BigQuery client library**. This gives you full control and is ideal for more dynamic or customized pipelines.
+Yes, you **can absolutely pass a dictionary** from Airflow Variables instead of retrieving each variable one by one. This is a clean and scalable approach, especially when you have multiple parameters.
 
 ---
 
-## ✅ What You’ll Do Inside `PythonOperator`
+## ✅ Step-by-Step: Use a Dictionary from Airflow Variable
 
-1. Load `project_id` and `dataset` from Airflow Variables
-2. Read SQL from GCS using `GCSHook`
-3. Inject parameters using `.replace()` or Jinja2
-4. Execute the query using `google.cloud.bigquery.Client`
-5. Optional: process or log the results
+### 🔧 1. **Set a dictionary in Airflow Variables**
+
+You can store a JSON-style dictionary in the UI or CLI:
+
+#### Option A: Airflow UI
+
+Go to **Admin → Variables**
+Key: `bq_config`
+Value:
+
+```json
+{
+  "project_id": "your-gcp-project-id",
+  "dataset": "your_dataset_name",
+  "region": "us-west1"
+}
+```
+
+#### Option B: Airflow CLI
+
+```bash
+airflow variables set bq_config '{"project_id": "your-gcp-project-id", "dataset": "your_dataset_name", "region": "us-west1"}'
+```
 
 ---
 
-## 🧠 Full Example Using `PythonOperator`
+### 🛠️ 2. **Update your DAG code**
+
+Here’s how to update your `PythonOperator` to use the whole dict:
 
 ```python
 from airflow import DAG
@@ -22,11 +42,14 @@ from airflow.utils.dates import days_ago
 from airflow.providers.google.cloud.hooks.gcs import GCSHook
 
 from google.cloud import bigquery
+import json
 
 def run_bq_query_from_gcs(**context):
-    # Load params from Airflow Variables
-    project_id = Variable.get("project_id")
-    dataset = Variable.get("bq_dataset")
+    # Load config dict from Airflow Variables
+    config = Variable.get("bq_config", deserialize_json=True)
+
+    project_id = config["project_id"]
+    dataset = config["dataset"]
 
     # Airflow macro value
     run_date = context['ds']  # e.g. '2025-06-04'
@@ -39,7 +62,7 @@ def run_bq_query_from_gcs(**context):
     )
     sql_template = sql_bytes.decode("utf-8")
 
-    # Replace placeholders (you can use .format(), f-strings, or jinja2)
+    # Replace placeholders
     sql = (
         sql_template
         .replace("{{ project_id }}", project_id)
@@ -52,7 +75,7 @@ def run_bq_query_from_gcs(**context):
     query_job = client.query(sql)
     results = query_job.result()
 
-    # Optional: print or log results
+    # Optional: log output
     for row in results:
         print(dict(row))
 
@@ -72,25 +95,15 @@ with DAG(
 
 ---
 
-## 🧾 Example GCS SQL (`query.sql`)
+## ✅ Why This Is Better
 
-```sql
-SELECT *
-FROM `{{ project_id }}.{{ dataset }}.your_table`
-WHERE DATE(date) = '{{ ds }}'
-```
-
----
-
-## ✅ Benefits of This Approach
-
-| Feature               | Why it's useful                          |
-| --------------------- | ---------------------------------------- |
-| Full Python control   | Dynamically build queries, log results   |
-| External SQL in GCS   | Clean separation of SQL logic            |
-| Variable-based params | Secure, reusable config                  |
-| BigQuery client use   | Can return, analyze, or validate results |
+| Benefit              | Explanation                              |
+| -------------------- | ---------------------------------------- |
+| Clean and scalable   | Avoids repetitive `Variable.get()` calls |
+| Easy config changes  | Update in one place via UI or CLI        |
+| Reusable across DAGs | Share `bq_config` in multiple workflows  |
+| Supports nesting     | You can structure more complex configs   |
 
 ---
 
-Would you prefer using **Jinja2 templating** over `.replace()` for better safety or flexibility? I can show that version too.
+Let me know if you'd like to combine this with **Jinja2 template rendering** (instead of manual `.replace()`), which can also be clean for larger SQL templates.
